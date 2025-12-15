@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Encrypted Chat Application
 
 ## How to Run the Web App
@@ -201,3 +202,7 @@ AI tools were used throughout the development process:
 - Claude (Anthropic) for code generation, debugging, and documentation
 - GitHub Copilot for code completion
 - ChatGPT for research on encryption algorithms
+=======
+# Team_Pumpkin
+This is the team pumpkin assignment E2E encryption chat application github repo
+>>>>>>> 8a5c967277085785596aa8833f489cb0b7ed4a02
