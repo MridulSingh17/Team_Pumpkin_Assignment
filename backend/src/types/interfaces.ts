@@ -1,4 +1,4 @@
-import { Document, Types } from 'mongoose';
+import { Document, Types } from "mongoose";
 
 // User interfaces
 export interface IUser extends Document {
@@ -6,7 +6,6 @@ export interface IUser extends Document {
   email: string;
   username: string;
   passwordHash: string;
-  publicKey: string;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
@@ -15,8 +14,9 @@ export interface IUser extends Document {
 
 // Message interfaces
 export interface IEncryptedVersion {
-  deviceId: Types.ObjectId;
+  forDeviceId: Types.ObjectId;
   encryptedContent: string;
+  iv: string;
 }
 
 export interface IMessage extends Document {
@@ -25,8 +25,7 @@ export interface IMessage extends Document {
   senderId: Types.ObjectId;
   recipientId: Types.ObjectId;
   senderDeviceId: Types.ObjectId;
-  senderEncryptedVersions: IEncryptedVersion[];
-  recipientEncryptedVersions: IEncryptedVersion[];
+  encryptedVersions: IEncryptedVersion[];
   timestamp: Date;
 }
 
@@ -47,13 +46,10 @@ export interface ISocketUser {
 export interface ISendMessageData {
   conversationId: string;
   senderDeviceId: string;
-  senderEncryptedVersions: Array<{
-    deviceId: string;
+  encryptedVersions: Array<{
+    forDeviceId: string;
     encryptedContent: string;
-  }>;
-  recipientEncryptedVersions: Array<{
-    deviceId: string;
-    encryptedContent: string;
+    iv: string;
   }>;
 }
 

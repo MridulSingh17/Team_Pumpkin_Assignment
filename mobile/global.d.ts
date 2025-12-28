@@ -16,6 +16,18 @@ declare global {
      * Converts a base64 string to an ArrayBuffer
      */
     function arrayBufferFromBase64(base64: string): ArrayBuffer;
+    
+    /**
+     * Alias for arrayBufferFromBase64 (expected by @craftzdog/react-native-buffer)
+     */
+    function base64ToArrayBuffer(base64: string): ArrayBuffer;
+    
+    /**
+     * Web Crypto API polyfill for React Native
+     */
+    var crypto: {
+        getRandomValues: <T extends ArrayBufferView | null>(array: T) => T;
+    };
 }
 
 export {};

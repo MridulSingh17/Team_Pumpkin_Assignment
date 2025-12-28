@@ -4,15 +4,20 @@
  * Supports importing backups and merging with existing data
  */
 
-import { localDB } from './localDB';
-import { retrieveKeys, retrieveDeviceId, decryptMessageFromDevices } from './encryption';
-import type { Conversation } from '@/types';
+import { localDB } from "./localDB";
+import {
+  retrieveKeys,
+  retrieveDeviceId,
+  decryptMultiDeviceMessage,
+} from "./encryption";
+import { deviceApi } from "./api";
+import type { Conversation } from "@/types";
 
 // ==================== TYPES ====================
 
 export interface ReadableExportData {
-  version: '2.0.0';
-  exportType: 'readable-backup';
+  version: "2.0.0";
+  exportType: "readable-backup";
   exportedAt: string;
   exportedBy: {
     userId: string;
@@ -72,13 +77,13 @@ export interface ExportProgress {
  */
 export async function exportReadableData(
   currentUserId: string,
-  onProgress?: (progress: ExportProgress) => void
+  onProgress?: (progress: ExportProgress) => void,
 ): Promise<ReadableExportData> {
   try {
     // Get user info from localStorage
-    const userStr = localStorage.getItem('user');
+    const userStr = localStorage.getItem("user");
     if (!userStr) {
-      throw new Error('User not found. Please log in again.');
+      throw new Error("User not found. Please log in again.");
     }
 
     const user = JSON.parse(userStr);
@@ -86,7 +91,7 @@ export async function exportReadableData(
     const keys = retrieveKeys();
 
     if (!deviceId || !keys) {
-      throw new Error('Encryption keys not found. Please log in again.');
+      throw new Error("Encryption keys not found. Please log in again.");
     }
 
     // Get all conversations from IndexedDB
@@ -97,7 +102,7 @@ export async function exportReadableData(
       totalConversations: conversations.length,
       currentMessage: 0,
       totalMessages: 0,
-      status: 'Loading conversations...',
+      status: "Loading conversations...",
     });
 
     const readableConversations: ReadableConversation[] = [];
@@ -129,33 +134,49 @@ export async function exportReadableData(
 
           // If not cached, decrypt now
           if (!decryptedContent) {
-            const senderId = typeof message.senderId === 'string'
-              ? message.senderId
-              : message.senderId._id;
+            if (
+              message.encryptedVersions &&
+              message.encryptedVersions.length > 0
+            ) {
+              try {
+                // Get sender device's public key
+                const senderDeviceResponse = await deviceApi.getDevice(
+                  message.senderDeviceId,
+                );
+                if (
+                  senderDeviceResponse.success &&
+                  senderDeviceResponse.data?.device
+                ) {
+                  const senderDevicePublicKey =
+                    senderDeviceResponse.data.device.publicKey;
 
-            const isSender = senderId === currentUserId;
-            const encryptedVersions = isSender
-              ? message.senderEncryptedVersions
-              : message.recipientEncryptedVersions;
-
-            if (encryptedVersions && encryptedVersions.length > 0) {
-              decryptedContent = await decryptMessageFromDevices(
-                encryptedVersions,
-                deviceId,
-                keys.privateKey
-              );
+                  // Decrypt using ECDH
+                  decryptedContent = await decryptMultiDeviceMessage(
+                    message.encryptedVersions,
+                    deviceId,
+                    senderDevicePublicKey,
+                  );
+                } else {
+                  decryptedContent = "[Unable to fetch sender device info]";
+                }
+              } catch (error) {
+                console.error("Failed to decrypt message:", error);
+                decryptedContent = "[Unable to decrypt]";
+              }
             } else {
-              decryptedContent = '[Unable to decrypt]';
+              decryptedContent = "[No encrypted content]";
             }
           }
 
-          const senderId = typeof message.senderId === 'string'
-            ? message.senderId
-            : message.senderId._id;
+          const senderId =
+            typeof message.senderId === "string"
+              ? message.senderId
+              : message.senderId._id;
 
-          const senderUsername = typeof message.senderId === 'string'
-            ? 'Unknown'
-            : message.senderId.username;
+          const senderUsername =
+            typeof message.senderId === "string"
+              ? "Unknown"
+              : message.senderId.username;
 
           readableMessages.push({
             messageId: message._id,
@@ -183,10 +204,16 @@ export async function exportReadableData(
           readableMessages.push({
             messageId: message._id,
             sender: {
-              _id: typeof message.senderId === 'string' ? message.senderId : message.senderId._id,
-              username: typeof message.senderId === 'string' ? 'Unknown' : message.senderId.username,
+              _id:
+                typeof message.senderId === "string"
+                  ? message.senderId
+                  : message.senderId._id,
+              username:
+                typeof message.senderId === "string"
+                  ? "Unknown"
+                  : message.senderId.username,
             },
-            content: '[Decryption failed]',
+            content: "[Decryption failed]",
             timestamp: message.timestamp,
             isOwn: false,
           });
@@ -212,12 +239,12 @@ export async function exportReadableData(
       totalConversations: conversations.length,
       currentMessage: 0,
       totalMessages,
-      status: 'Finalizing export...',
+      status: "Finalizing export...",
     });
 
     const exportData: ReadableExportData = {
-      version: '2.0.0',
-      exportType: 'readable-backup',
+      version: "2.0.0",
+      exportType: "readable-backup",
       exportedAt: new Date().toISOString(),
       exportedBy: {
         userId: user._id || user.id,
@@ -234,8 +261,10 @@ export async function exportReadableData(
 
     return exportData;
   } catch (error) {
-    console.error('Error exporting readable data:', error);
-    throw new Error(`Failed to export data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error("Error exporting readable data:", error);
+    throw new Error(
+      `Failed to export data: ${error instanceof Error ? error.message : "Unknown error"}`,
+    );
   }
 }
 
@@ -245,15 +274,18 @@ export async function exportReadableData(
 export function downloadBackupFile(exportData: ReadableExportData): void {
   try {
     const jsonString = JSON.stringify(exportData, null, 2);
-    const blob = new Blob([jsonString], { type: 'application/json' });
+    const blob = new Blob([jsonString], { type: "application/json" });
     const url = URL.createObjectURL(blob);
 
     // Create filename with timestamp
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .slice(0, -5);
     const filename = `chat-backup-${timestamp}.json`;
 
     // Trigger download
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
     a.download = filename;
     document.body.appendChild(a);
@@ -263,8 +295,8 @@ export function downloadBackupFile(exportData: ReadableExportData): void {
     // Clean up
     URL.revokeObjectURL(url);
   } catch (error) {
-    console.error('Error downloading backup file:', error);
-    throw new Error('Failed to download backup file');
+    console.error("Error downloading backup file:", error);
+    throw new Error("Failed to download backup file");
   }
 }
 
@@ -291,22 +323,28 @@ export async function readBackupFile(file: File): Promise<ReadableExportData> {
     const data = JSON.parse(text);
 
     // Validate format
-    if (!data.version || !data.exportType || data.exportType !== 'readable-backup') {
-      throw new Error('Invalid backup file format');
+    if (
+      !data.version ||
+      !data.exportType ||
+      data.exportType !== "readable-backup"
+    ) {
+      throw new Error("Invalid backup file format");
     }
 
-    if (data.version !== '2.0.0') {
+    if (data.version !== "2.0.0") {
       throw new Error(`Unsupported backup version: ${data.version}`);
     }
 
     if (!data.conversations || !Array.isArray(data.conversations)) {
-      throw new Error('Invalid backup data: conversations not found');
+      throw new Error("Invalid backup data: conversations not found");
     }
 
     return data as ReadableExportData;
   } catch (error) {
-    console.error('Error reading backup file:', error);
-    throw new Error(`Failed to read backup file: ${error instanceof Error ? error.message : 'Invalid format'}`);
+    console.error("Error reading backup file:", error);
+    throw new Error(
+      `Failed to read backup file: ${error instanceof Error ? error.message : "Invalid format"}`,
+    );
   }
 }
 
@@ -316,7 +354,7 @@ export async function readBackupFile(file: File): Promise<ReadableExportData> {
 export async function importBackupData(
   exportData: ReadableExportData,
   currentUserId: string,
-  onProgress?: (progress: ExportProgress) => void
+  onProgress?: (progress: ExportProgress) => void,
 ): Promise<ImportSummary> {
   const summary: ImportSummary = {
     success: false,
@@ -328,7 +366,9 @@ export async function importBackupData(
   try {
     // Get existing conversations
     const existingConversations = await localDB.getConversations();
-    const existingConversationIds = new Set(existingConversations.map((c) => c._id));
+    const existingConversationIds = new Set(
+      existingConversations.map((c) => c._id),
+    );
 
     const totalConversations = exportData.conversations.length;
 
@@ -345,16 +385,15 @@ export async function importBackupData(
 
       try {
         // Check if conversation already exists
-        const conversationExists = existingConversationIds.has(importedConv.conversationId);
+        const conversationExists = existingConversationIds.has(
+          importedConv.conversationId,
+        );
 
         if (!conversationExists) {
           // Create new conversation entry
           const newConversation: Conversation = {
             _id: importedConv.conversationId,
-            participants: importedConv.participants.map(p => ({
-              ...p,
-              publicKey: '', // Imported conversations may not have publicKey
-            })),
+            participants: importedConv.participants,
             createdAt: importedConv.createdAt,
             lastMessageAt: importedConv.lastMessageAt,
           };
@@ -364,7 +403,9 @@ export async function importBackupData(
         }
 
         // Get existing messages for this conversation
-        const existingMessages = await localDB.getMessages(importedConv.conversationId);
+        const existingMessages = await localDB.getMessages(
+          importedConv.conversationId,
+        );
         const existingMessageIds = new Set(existingMessages.map((m) => m._id));
 
         // Import messages
@@ -390,7 +431,10 @@ export async function importBackupData(
             });
 
             // Cache the decrypted content
-            await localDB.saveDecryptedMessage(importedMsg.messageId, importedMsg.content);
+            await localDB.saveDecryptedMessage(
+              importedMsg.messageId,
+              importedMsg.content,
+            );
 
             summary.messagesImported++;
 
@@ -402,21 +446,33 @@ export async function importBackupData(
               status: `Importing messages: ${j + 1}/${importedConv.messages.length}`,
             });
           } catch (error) {
-            console.error(`Failed to import message ${importedMsg.messageId}:`, error);
-            summary.errors.push(`Message ${importedMsg.messageId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error(
+              `Failed to import message ${importedMsg.messageId}:`,
+              error,
+            );
+            summary.errors.push(
+              `Message ${importedMsg.messageId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+            );
           }
         }
       } catch (error) {
-        console.error(`Failed to import conversation ${importedConv.conversationId}:`, error);
-        summary.errors.push(`Conversation ${importedConv.conversationId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        console.error(
+          `Failed to import conversation ${importedConv.conversationId}:`,
+          error,
+        );
+        summary.errors.push(
+          `Conversation ${importedConv.conversationId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+        );
       }
     }
 
     summary.success = true;
     return summary;
   } catch (error) {
-    console.error('Error importing backup data:', error);
-    summary.errors.push(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error("Error importing backup data:", error);
+    summary.errors.push(
+      `Import failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+    );
     return summary;
   }
 }
@@ -424,27 +480,30 @@ export async function importBackupData(
 /**
  * Validate backup file before import
  */
-export function validateBackupData(exportData: ReadableExportData): { valid: boolean; errors: string[] } {
+export function validateBackupData(exportData: ReadableExportData): {
+  valid: boolean;
+  errors: string[];
+} {
   const errors: string[] = [];
 
   if (!exportData.version) {
-    errors.push('Missing version field');
+    errors.push("Missing version field");
   }
 
-  if (exportData.version !== '2.0.0') {
+  if (exportData.version !== "2.0.0") {
     errors.push(`Unsupported version: ${exportData.version}`);
   }
 
-  if (!exportData.exportType || exportData.exportType !== 'readable-backup') {
-    errors.push('Invalid export type');
+  if (!exportData.exportType || exportData.exportType !== "readable-backup") {
+    errors.push("Invalid export type");
   }
 
   if (!exportData.conversations || !Array.isArray(exportData.conversations)) {
-    errors.push('Invalid or missing conversations data');
+    errors.push("Invalid or missing conversations data");
   }
 
   if (!exportData.metadata) {
-    errors.push('Missing metadata');
+    errors.push("Missing metadata");
   }
 
   return {

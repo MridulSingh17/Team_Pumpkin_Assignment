@@ -242,7 +242,14 @@ export const deviceApi = {
             ApiResponse<{ devices: Device[] }>
         >(`/devices/user/${userId}`);
         return response.data;
-    },
+    },  getDevice: async (
+    deviceId: string
+  ): Promise<ApiResponse<{ device: Device }>> => {
+   const response = await apiClient.get<ApiResponse<{ device: Device }>>(
+      `/devices/${deviceId}`
+    );
+    return response.data;
+  },
 
     removeDevice: async (deviceId: string): Promise<ApiResponse> => {
         const response = await apiClient.delete<ApiResponse>(

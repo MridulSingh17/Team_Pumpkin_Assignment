@@ -1,196 +1,192 @@
 // User Types
 export interface User {
-    _id: string;
-    email: string;
-    username: string;
-    publicKey: string;
-    createdAt: string;
-    updatedAt: string;
+  _id: string;
+  email: string;
+  username: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RegisterData {
-    email: string;
-    username: string;
-    password: string;
-    publicKey: string;
-    deviceType: string;
+  email: string;
+  username: string;
+  password: string;
+  publicKey: string;
+  deviceType: string;
 }
 
 export interface LoginData {
-    email: string;
-    password: string;
-    deviceType?: string;
-    publicKey?: string;
+  email: string;
+  password: string;
+  deviceType?: string;
+  publicKey?: string;
 }
 
 export interface QRLoginData {
-    token: string;
-    deviceType: "ios" | "android";
-    publicKey: string;
+  token: string;
+  deviceType: "ios" | "android";
+  publicKey: string;
 }
 
 export interface QRLoginResponse {
-    success: boolean;
-    message: string;
-    data: {
-        accessToken: string;
-        refreshToken: string;
-        user: User;
-        device: Device;
-    };
+  success: boolean;
+  message: string;
+  data: {
+    accessToken: string;
+    refreshToken: string;
+    user: User;
+    device: Device;
+  };
 }
 
 export interface Device {
-    _id: string;
-    deviceId: string;
-    deviceType: "web" | "ios" | "android";
-    publicKey: string;
-    isActive?: boolean;
-    createdAt?: string;
-    updatedAt?: string;
+  _id: string;
+  deviceId: string;
+  deviceType: "web" | "ios" | "android";
+  publicKey: string;
+  isActive?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface RegisterDeviceData {
-    deviceType: "web" | "ios" | "android";
-    publicKey: string;
+  deviceType: "web" | "ios" | "android";
+  publicKey: string;
 }
 
 export interface AuthResponse {
-    success: boolean;
-    message: string;
-    data: {
-        user: User;
-        device?: Device | null;
-        token: string;
-    };
+  success: boolean;
+  message: string;
+  data: {
+    user: User;
+    device?: Device | null;
+    token: string;
+  };
 }
 
 // Conversation Types
 export interface Participant {
-    _id: string;
-    username: string;
-    email: string;
-    publicKey: string;
+  _id: string;
+  username: string;
+  email: string;
 }
 
 export interface Conversation {
-    _id: string;
-    participants: Participant[];
-    createdAt: string;
-    lastMessageAt: string;
-    lastMessage?: Message;
+  _id: string;
+  participants: Participant[];
+  createdAt: string;
+  lastMessageAt: string;
+  lastMessage?: Message;
 }
 
 export interface CreateConversationData {
-    participantId: string;
+  participantId: string;
 }
 
 // Message Types
-export interface DeviceEncryptedVersion {
-    deviceId: string;
-    encryptedContent: string;
+export interface EncryptedVersion {
+  forDeviceId: string;
+  encryptedContent: string;
+  iv: string;
 }
 
 export interface Message {
+  _id: string;
+  conversationId: string;
+  senderId: {
     _id: string;
-    conversationId: string;
-    senderId: {
-        _id: string;
-        username: string;
-        email: string;
-    };
-    recipientId: string;
-    senderDeviceId: string;
-    senderEncryptedVersions: DeviceEncryptedVersion[];
-    recipientEncryptedVersions: DeviceEncryptedVersion[];
-    timestamp: string;
+    username: string;
+    email: string;
+  };
+  recipientId: string;
+  senderDeviceId: string;
+  encryptedVersions: EncryptedVersion[];
+  timestamp: string;
 }
 
 export interface SendMessageData {
-    conversationId: string;
-    senderDeviceId: string;
-    senderEncryptedVersions: DeviceEncryptedVersion[];
-    recipientEncryptedVersions: DeviceEncryptedVersion[];
+  conversationId: string;
+  senderDeviceId: string;
+  encryptedVersions: EncryptedVersion[];
 }
 
 export interface MessagesPagination {
-    currentPage: number;
-    totalPages: number;
-    totalMessages: number;
-    limit: number;
-    hasNextPage: boolean;
-    hasPrevPage: boolean;
+  currentPage: number;
+  totalPages: number;
+  totalMessages: number;
+  limit: number;
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
 }
 
 export interface MessagesResponse {
-    success: boolean;
-    data: {
-        messages: Message[];
-        pagination: MessagesPagination;
-    };
+  success: boolean;
+  data: {
+    messages: Message[];
+    pagination: MessagesPagination;
+  };
 }
 
 // Export/Import Types
 export interface ExportData {
-    conversationId: string;
-    backupKey: string;
+  conversationId: string;
+  backupKey: string;
 }
 
 export interface ImportData {
-    encryptedData: string;
-    backupKey: string;
+  encryptedData: string;
+  backupKey: string;
 }
 
 export interface ExportResponse {
-    success: boolean;
-    message: string;
-    data: {
-        encryptedData: string;
-        conversationId: string;
-        messageCount: number;
-        exportedAt: string;
-    };
+  success: boolean;
+  message: string;
+  data: {
+    encryptedData: string;
+    conversationId: string;
+    messageCount: number;
+    exportedAt: string;
+  };
 }
 
 export interface ImportResponse {
-    success: boolean;
-    message: string;
-    data: {
-        conversationId: string;
-        totalMessages: number;
-        importedCount: number;
-        skippedCount: number;
-        importedAt: string;
-    };
+  success: boolean;
+  message: string;
+  data: {
+    conversationId: string;
+    totalMessages: number;
+    importedCount: number;
+    skippedCount: number;
+    importedAt: string;
+  };
 }
 
 // API Response Types
 export interface ApiResponse<T = unknown> {
-    success: boolean;
-    message?: string;
-    data?: T;
-    error?: string;
+  success: boolean;
+  message?: string;
+  data?: T;
+  error?: string;
 }
 
 // Socket Event Types
 export interface SocketMessage {
-    message: Message;
+  message: Message;
 }
 
 export interface SendSocketMessage {
-    conversationId: string;
-    senderDeviceId: string;
-    senderEncryptedVersions: DeviceEncryptedVersion[];
-    recipientEncryptedVersions: DeviceEncryptedVersion[];
+  conversationId: string;
+  senderDeviceId: string;
+  encryptedVersions: EncryptedVersion[];
 }
 
 // Encryption Types
 export interface KeyPair {
-    publicKey: string;
-    privateKey: string;
+  publicKey: string;
+  privateKey: string;
 }
 
 export interface EncryptedMessage {
-    encryptedContent: string;
-    iv?: string;
+  encryptedContent: string;
+  iv?: string;
 }

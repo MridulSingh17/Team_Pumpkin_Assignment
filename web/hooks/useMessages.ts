@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { messageApi, handleApiError, deviceApi } from "@/lib/api";
 import {
   retrieveKeys,
   retrieveDeviceId,
   prepareMultiDeviceMessage,
-  decryptMessageFromDevices
+  decryptMultiDeviceMessage,
 } from "@/lib/encryption";
 import { useSocket } from "@/context/SocketContext";
 import { localDB, type ImportedMessage } from "@/lib/localDB";
@@ -18,7 +18,11 @@ interface UseMessagesOptions {
   currentUserId?: string;
 }
 
-export function useMessages({ conversationId, recipientId, currentUserId }: UseMessagesOptions) {
+export function useMessages({
+  conversationId,
+  recipientId,
+  currentUserId,
+}: UseMessagesOptions) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [decryptedMessages, setDecryptedMessages] = useState<
     Map<string, string>
@@ -26,13 +30,12 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState<MessagesPagination | null>(null);
-  const {
-    socket,
-    connected,
-    sendMessage: sendSocketMessage,
-  } = useSocket();
+  const { socket, connected, sendMessage: sendSocketMessage } = useSocket();
 
-  // Decrypt a message
+  // Track the last sent message content (we just sent it, no need to decrypt)
+  const lastSentMessageContent = useRef<string | null>(null);
+
+  // Decrypt a message using EC+ECDH
   const decryptMessageContent = useCallback(
     async (message: Message, currentUserId: string): Promise<string> => {
       try {
@@ -50,27 +53,50 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
           throw new Error("Encryption keys or device ID not found");
         }
 
-        // Handle multi-device encryption format
-        if (message.senderEncryptedVersions && message.recipientEncryptedVersions) {
-          // Determine which encrypted content to use based on whether user is sender or recipient
-          const senderId = typeof message.senderId === 'string'
+        // Check if this is our own sent message from this device
+        const senderId =
+          typeof message.senderId === "string"
             ? message.senderId
             : message.senderId._id;
-          const isSender = senderId === currentUserId;
+        const isMySentMessage =
+          senderId === currentUserId && message.senderDeviceId === deviceId;
 
-          const encryptedVersions = isSender
-            ? message.senderEncryptedVersions
-            : message.recipientEncryptedVersions;
+        if (isMySentMessage) {
+          // This is a message we sent from this device
+          // We don't encrypt for ourselves, so there's no encrypted version for this device
+          // The plaintext should have been cached when we sent it
+          // If it's not cached, something went wrong
+          console.warn(
+            "Sent message not in cache - plaintext may have been lost:",
+            message._id,
+          );
+          return "[Sent message - plaintext not cached]";
+        }
 
-          // Decrypt using device-specific encryption
-          const decrypted = await decryptMessageFromDevices(
-            encryptedVersions,
+        // Handle new unified encryptedVersions format (EC+ECDH)
+        if (message.encryptedVersions && message.encryptedVersions.length > 0) {
+          // Get sender device's public key for ECDH
+          const senderDeviceResponse = await deviceApi.getDevice(
+            message.senderDeviceId,
+          );
+          if (
+            !senderDeviceResponse.success ||
+            !senderDeviceResponse.data?.device
+          ) {
+            throw new Error("Failed to fetch sender device info");
+          }
+          const senderDevicePublicKey =
+            senderDeviceResponse.data.device.publicKey;
+
+          // Decrypt using ECDH-derived key
+          const decrypted = await decryptMultiDeviceMessage(
+            message.encryptedVersions,
             deviceId,
-            keys.privateKey
+            senderDevicePublicKey,
           );
 
           // Only cache if successfully decrypted
-          if (decrypted && !decrypted.startsWith('[')) {
+          if (decrypted && !decrypted.startsWith("[")) {
             await localDB.saveDecryptedMessage(message._id, decrypted);
           }
 
@@ -78,7 +104,7 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
         }
 
         // If we get here, something is wrong with the message format
-        console.error('Message has no encrypted versions:', message);
+        console.error("Message has no encrypted versions:", message);
         return "[Message format not supported]";
       } catch (err) {
         console.error("Error in decryptMessageContent:", err);
@@ -104,11 +130,13 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
           throw new Error("Device ID not found. Please log in again.");
         }
 
+        // Fetch messages from backend (filtered for this device)
+        // Returns: messages encrypted for this device OR sent from this device
         const response = await messageApi.getMessages(
           conversationId,
           page,
           limit,
-          deviceId, // Pass deviceId to filter messages
+          deviceId,
         );
 
         if (response.success && response.data) {
@@ -125,41 +153,63 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
           if (currentUserId) {
             Promise.all(
               newMessages.map(async (message) => {
-                const decrypted = await decryptMessageContent(message, currentUserId);
-                setDecryptedMessages((prev) => new Map(prev).set(message._id, decrypted));
+                // Check if we already have decrypted content cached
+                const cached = await localDB.getDecryptedMessage(message._id);
+                if (cached) {
+                  setDecryptedMessages((prev) =>
+                    new Map(prev).set(message._id, cached),
+                  );
+                } else {
+                  // Decrypt and cache
+                  const decrypted = await decryptMessageContent(
+                    message,
+                    currentUserId,
+                  );
+                  setDecryptedMessages((prev) =>
+                    new Map(prev).set(message._id, decrypted),
+                  );
+                }
               }),
             );
           }
 
           // Also load imported messages for this conversation
-          const importedMessages = await localDB.getImportedMessages(conversationId);
+          const importedMessages =
+            await localDB.getImportedMessages(conversationId);
           if (importedMessages.length > 0) {
             // Convert imported messages to Message format for display
-            const importedAsMessages: Message[] = importedMessages.map((im: ImportedMessage) => ({
-              _id: im._id,
-              conversationId: im.conversationId,
-              senderId: {
-                _id: im.senderId,
-                username: im.senderUsername,
-                email: '',
-              },
-              recipientId: '',
-              senderDeviceId: '',
-              senderEncryptedVersions: [],
-              recipientEncryptedVersions: [],
-              timestamp: im.timestamp,
-            }));
+            const importedAsMessages: Message[] = importedMessages.map(
+              (im: ImportedMessage) => ({
+                _id: im._id,
+                conversationId: im.conversationId,
+                senderId: {
+                  _id: im.senderId,
+                  username: im.senderUsername,
+                  email: "",
+                },
+                recipientId: "",
+                senderDeviceId: "",
+                encryptedVersions: [],
+                timestamp: im.timestamp,
+              }),
+            );
 
             // Merge with regular messages and sort by timestamp
             const allMessages = [...newMessages, ...importedAsMessages].sort(
-              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+              (a, b) =>
+                new Date(a.timestamp).getTime() -
+                new Date(b.timestamp).getTime(),
             );
 
-            setMessages(page === 1 ? allMessages : [...messages, ...allMessages]);
+            setMessages(
+              page === 1 ? allMessages : [...messages, ...allMessages],
+            );
 
             // Cache decrypted content for imported messages
             importedMessages.forEach((im) => {
-              setDecryptedMessages((prev) => new Map(prev).set(im._id, im.content));
+              setDecryptedMessages((prev) =>
+                new Map(prev).set(im._id, im.content),
+              );
             });
           }
         }
@@ -186,7 +236,9 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
       const deviceId = retrieveDeviceId();
 
       if (!keys || !deviceId) {
-        setError("Encryption keys or device ID not found. Please log in again.");
+        setError(
+          "Encryption keys or device ID not found. Please log in again.",
+        );
         return false;
       }
 
@@ -194,35 +246,50 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
         // Don't set loading to true when sending - prevents full screen reload effect
         setError(null);
 
-        // Get sender's devices (current user)
+        // Get sender's OTHER devices (excluding current) for multi-device sync
         const senderDevicesResponse = await deviceApi.getMyDevices();
-        if (!senderDevicesResponse.success || !senderDevicesResponse.data?.devices) {
+        if (
+          !senderDevicesResponse.success ||
+          !senderDevicesResponse.data?.devices
+        ) {
           throw new Error("Failed to fetch sender devices");
         }
-        const senderDevices = senderDevicesResponse.data.devices;
+        const allSenderDevices = senderDevicesResponse.data.devices;
+        const senderOtherDevices = allSenderDevices.filter(
+          (d) => d._id !== deviceId,
+        );
 
         // Get recipient's devices
-        const recipientDevicesResponse = await deviceApi.getUserDevices(recipientId);
-        if (!recipientDevicesResponse.success || !recipientDevicesResponse.data?.devices) {
+        const recipientDevicesResponse =
+          await deviceApi.getUserDevices(recipientId);
+        if (
+          !recipientDevicesResponse.success ||
+          !recipientDevicesResponse.data?.devices
+        ) {
           throw new Error("Failed to fetch recipient devices");
         }
         const recipientDevices = recipientDevicesResponse.data.devices;
 
-        // Validate we have devices
-        if (senderDevices.length === 0) {
-          throw new Error("No active devices found for sender");
-        }
+        // Validate we have recipient devices
         if (recipientDevices.length === 0) {
           throw new Error("No active devices found for recipient");
         }
 
-        // Prepare multi-device encrypted message
+        // Prepare encrypted message for:
+        // - Sender's OTHER devices (not current - we have plaintext!)
+        // - Recipient's ALL devices
         const encryptedData = await prepareMultiDeviceMessage(
           content,
-          senderDevices,
+          deviceId,
+          senderOtherDevices, // Only OTHER devices - current device stores plaintext locally
           recipientDevices,
-          deviceId
         );
+
+        // Store plaintext locally - when message comes back, use this
+        lastSentMessageContent.current = content;
+
+        // Note: The message will be saved to IndexedDB when it comes back from the socket
+        // with the actual message ID from the backend
 
         // Send via socket if connected, otherwise use HTTP
         if (connected && socket) {
@@ -256,7 +323,7 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
     }
 
     const handleNewMessage = async (data: Message | { message: Message }) => {
-      const message = 'message' in data ? data.message : data;
+      const message = "message" in data ? data.message : data;
 
       // Only add message if it belongs to current conversation
       if (message.conversationId === conversationId) {
@@ -271,13 +338,60 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
         // Save message to local storage
         await localDB.saveMessage(message);
 
-        // Decrypt the new message
-        if (currentUserId) {
-          decryptMessageContent(message, currentUserId).then((decrypted) => {
-            setDecryptedMessages((prev) => new Map(prev).set(message._id, decrypted));
-          }).catch(err => {
-            console.error('Failed to decrypt new message:', err);
-          });
+        // Check if this is a message we just sent (from this device)
+        const senderId =
+          typeof message.senderId === "string"
+            ? message.senderId
+            : message.senderId._id;
+        const isMySentMessage =
+          senderId === currentUserId &&
+          message.senderDeviceId === retrieveDeviceId();
+
+        if (isMySentMessage && lastSentMessageContent.current) {
+          // This is our own just-sent message - use the plaintext we have
+          const plaintext = lastSentMessageContent.current;
+          setDecryptedMessages((prev) =>
+            new Map(prev).set(message._id, plaintext),
+          );
+          // Cache it permanently in IndexedDB
+          await localDB.saveDecryptedMessage(message._id, plaintext);
+          // Clear the ref
+          lastSentMessageContent.current = null;
+        } else if (isMySentMessage) {
+          // This is our old sent message (from page refresh/reload)
+          // Check if we have it cached
+          const cached = await localDB.getDecryptedMessage(message._id);
+          if (cached) {
+            setDecryptedMessages((prev) =>
+              new Map(prev).set(message._id, cached),
+            );
+          } else {
+            // Shouldn't happen, but decrypt as fallback
+            if (currentUserId) {
+              decryptMessageContent(message, currentUserId)
+                .then((decrypted) => {
+                  setDecryptedMessages((prev) =>
+                    new Map(prev).set(message._id, decrypted),
+                  );
+                })
+                .catch((err) => {
+                  console.error("Failed to decrypt sent message:", err);
+                });
+            }
+          }
+        } else {
+          // Decrypt messages from others (or our old messages when fetching)
+          if (currentUserId) {
+            decryptMessageContent(message, currentUserId)
+              .then((decrypted) => {
+                setDecryptedMessages((prev) =>
+                  new Map(prev).set(message._id, decrypted),
+                );
+              })
+              .catch((err) => {
+                console.error("Failed to decrypt new message:", err);
+              });
+          }
         }
       }
     };
@@ -330,41 +444,52 @@ export function useMessages({ conversationId, recipientId, currentUserId }: UseM
           if (currentUserId) {
             Promise.all(
               newMessages.map(async (message) => {
-                const decrypted = await decryptMessageContent(message, currentUserId);
-                setDecryptedMessages((prev) => new Map(prev).set(message._id, decrypted));
+                const decrypted = await decryptMessageContent(
+                  message,
+                  currentUserId,
+                );
+                setDecryptedMessages((prev) =>
+                  new Map(prev).set(message._id, decrypted),
+                );
               }),
             );
           }
 
           // Also load imported messages for this conversation
-          const importedMessages = await localDB.getImportedMessages(conversationId);
+          const importedMessages =
+            await localDB.getImportedMessages(conversationId);
           if (importedMessages.length > 0) {
             // Convert imported messages to Message format for display
-            const importedAsMessages: Message[] = importedMessages.map((im: ImportedMessage) => ({
-              _id: im._id,
-              conversationId: im.conversationId,
-              senderId: {
-                _id: im.senderId,
-                username: im.senderUsername,
-                email: '',
-              },
-              recipientId: '',
-              senderDeviceId: '',
-              senderEncryptedVersions: [],
-              recipientEncryptedVersions: [],
-              timestamp: im.timestamp,
-            }));
+            const importedAsMessages: Message[] = importedMessages.map(
+              (im: ImportedMessage) => ({
+                _id: im._id,
+                conversationId: im.conversationId,
+                senderId: {
+                  _id: im.senderId,
+                  username: im.senderUsername,
+                  email: "",
+                },
+                recipientId: "",
+                senderDeviceId: "",
+                encryptedVersions: [],
+                timestamp: im.timestamp,
+              }),
+            );
 
             // Merge with regular messages and sort by timestamp
             const allMessages = [...newMessages, ...importedAsMessages].sort(
-              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+              (a, b) =>
+                new Date(a.timestamp).getTime() -
+                new Date(b.timestamp).getTime(),
             );
 
             setMessages(allMessages);
 
             // Cache decrypted content for imported messages
             importedMessages.forEach((im) => {
-              setDecryptedMessages((prev) => new Map(prev).set(im._id, im.content));
+              setDecryptedMessages((prev) =>
+                new Map(prev).set(im._id, im.content),
+              );
             });
           }
         }

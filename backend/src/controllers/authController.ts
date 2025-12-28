@@ -61,7 +61,6 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       email,
       username,
       passwordHash: password, // Will be hashed by pre-save hook
-      publicKey,
     });
 
     // Create device for this user
@@ -100,13 +99,13 @@ export const register = async (req: Request, res: Response): Promise<void> => {
           _id: user._id,
           email: user.email,
           username: user.username,
-          publicKey: user.publicKey,
           createdAt: user.createdAt,
         },
         device: {
           _id: device._id,
           deviceId: device.deviceId,
           deviceType: device.deviceType,
+          publicKey: device.publicKey,
         },
         token: accessToken, // Also return token for Socket.IO
       },
@@ -236,13 +235,13 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             _id: user._id,
             email: user.email,
             username: user.username,
-            publicKey: user.publicKey,
             createdAt: user.createdAt,
           },
           device: {
             _id: device._id,
             deviceId: device.deviceId,
             deviceType: device.deviceType,
+            publicKey: device.publicKey,
           },
           token: tokenForResponse, // Also return token for Socket.IO
         },
@@ -422,7 +421,6 @@ export const verifyQRToken = async (
           _id: user._id,
           email: user.email,
           username: user.username,
-          publicKey: user.publicKey,
           createdAt: user.createdAt,
           updatedAt: user.updatedAt,
         },
@@ -598,7 +596,6 @@ export const verifyQRTokenAndLogin = async (
           _id: user._id,
           email: user.email,
           username: user.username,
-          publicKey: user.publicKey,
           createdAt: user.createdAt,
         },
         device: {

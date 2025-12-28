@@ -3,6 +3,36 @@
  * This file sets up global functions needed for Buffer and other utilities
  */
 
+import * as Crypto from "expo-crypto";
+
+// Polyfill for crypto.getRandomValues (required by @noble/curves)
+if (typeof global.crypto === "undefined") {
+  (global as any).crypto = {};
+}
+
+if (typeof global.crypto.getRandomValues === "undefined") {
+  global.crypto.getRandomValues = function <T extends ArrayBufferView | null>(
+    array: T
+  ): T {
+    if (array === null) {
+      throw new TypeError(
+        "Failed to execute 'getRandomValues' on 'Crypto': parameter 1 is not of type 'ArrayBufferView'."
+      );
+    }
+
+    // Get random bytes from expo-crypto
+    const randomBytes = Crypto.getRandomBytes(array.byteLength);
+    
+    // Copy bytes into the provided array buffer view
+    const view = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+    for (let i = 0; i < view.length; i++) {
+      view[i] = randomBytes[i];
+    }
+
+    return array;
+  };
+}
+
 // Base64 encoding/decoding characters
 const base64Chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -61,6 +91,11 @@ if (typeof global.arrayBufferFromBase64 === "undefined") {
 
         return bytes.buffer;
     };
+}
+
+// Alias for base64ToArrayBuffer (expected by @craftzdog/react-native-buffer)
+if (typeof global.base64ToArrayBuffer === "undefined") {
+    global.base64ToArrayBuffer = global.arrayBufferFromBase64;
 }
 
 // Export to ensure the file is imported

@@ -12,12 +12,7 @@ export const sendMessage = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const {
-      conversationId,
-      senderDeviceId,
-      senderEncryptedVersions,
-      recipientEncryptedVersions,
-    } = req.body;
+    const { conversationId, senderDeviceId, encryptedVersions } = req.body;
     const senderId = req.userId;
 
     // Validate required fields
@@ -37,41 +32,38 @@ export const sendMessage = async (
       return;
     }
 
-    if (!Array.isArray(senderEncryptedVersions) || senderEncryptedVersions.length === 0) {
+    if (!Array.isArray(encryptedVersions) || encryptedVersions.length === 0) {
       res.status(400).json({
         success: false,
-        message: "Sender encrypted versions must be a non-empty array",
-      });
-      return;
-    }
-
-    if (!Array.isArray(recipientEncryptedVersions) || recipientEncryptedVersions.length === 0) {
-      res.status(400).json({
-        success: false,
-        message: "Recipient encrypted versions must be a non-empty array",
+        message: "encryptedVersions must be a non-empty array",
       });
       return;
     }
 
     // Validate structure of encrypted versions
-    const validateVersions = (versions: any[], name: string) => {
-      for (const version of versions) {
-        if (!version.deviceId || !version.encryptedContent) {
-          res.status(400).json({
-            success: false,
-            message: `Invalid ${name}: each version must have deviceId and encryptedContent`,
-          });
-          return false;
-        }
+    for (const version of encryptedVersions) {
+      if (!version.forDeviceId || !version.encryptedContent || !version.iv) {
+        res.status(400).json({
+          success: false,
+          message:
+            "Each version must have forDeviceId, encryptedContent, and iv",
+        });
+        return;
       }
-      return true;
-    };
-
-    if (!validateVersions(senderEncryptedVersions, "sender encrypted versions")) {
-      return;
     }
 
-    if (!validateVersions(recipientEncryptedVersions, "recipient encrypted versions")) {
+    // Verify all forDeviceIds are valid active devices
+    const deviceIds = encryptedVersions.map((v: any) => v.forDeviceId);
+    const devicesCount = await Device.countDocuments({
+      _id: { $in: deviceIds },
+      isActive: true,
+    });
+
+    if (devicesCount !== deviceIds.length) {
+      res.status(400).json({
+        success: false,
+        message: "Some device IDs are invalid or inactive",
+      });
       return;
     }
 
@@ -116,7 +108,7 @@ export const sendMessage = async (
 
     // Determine recipient ID from conversation participants
     const recipientId = conversation.participants.find(
-      (p) => p.toString() !== senderId?.toString()
+      (p) => p.toString() !== senderId?.toString(),
     );
 
     // Create new message with multi-device encryption
@@ -125,15 +117,13 @@ export const sendMessage = async (
       senderId,
       recipientId,
       senderDeviceId,
-      senderEncryptedVersions,
-      recipientEncryptedVersions,
+      encryptedVersions,
     };
 
     const createdMessage = await Message.create(messageData);
     const message = Array.isArray(createdMessage)
       ? createdMessage[0]
       : createdMessage;
-
 
     // Update conversation's lastMessageAt
     conversation.lastMessageAt = message.timestamp;
@@ -176,8 +166,6 @@ export const getMessages = async (
     const limit = parseInt(req.query.limit as string) || 50;
     const skip = (page - 1) * limit;
 
-
-
     // Check if conversation exists
     const conversation = await Conversation.findById(conversationId);
 
@@ -215,12 +203,15 @@ export const getMessages = async (
     }
 
     // Build query filter
+    // Return messages that:
+    // 1. Have encrypted version for this device, OR
+    // 2. Were sent by this user from this device (we have plaintext cached)
     const messageFilter: any = {
       conversationId,
       $or: [
-        { 'senderEncryptedVersions.deviceId': deviceId },
-        { 'recipientEncryptedVersions.deviceId': deviceId }
-      ]
+        { "encryptedVersions.forDeviceId": deviceId }, // Messages encrypted for this device
+        { senderId: currentUserId, senderDeviceId: deviceId }, // Messages sent from this device
+      ],
     };
 
     // Get total count of messages
@@ -233,8 +224,6 @@ export const getMessages = async (
       .limit(limit)
       .populate("senderId", "username email")
       .lean();
-
-
 
     // Calculate pagination info
     const totalPages = Math.ceil(totalMessages / limit);

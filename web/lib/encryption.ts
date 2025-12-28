@@ -1,132 +1,411 @@
 /**
  * Client-side encryption utilities for end-to-end encrypted messaging
- * Uses Web Crypto API for RSA and AES encryption
+ * Uses Web Crypto API for EC (P-256) + ECDH + AES-GCM encryption
+ *
+ * Architecture:
+ * - Each device has an EC P-256 key pair (much smaller and faster than RSA)
+ * - ECDH (Elliptic Curve Diffie-Hellman) derives shared secrets between device pairs
+ * - AES-256-GCM encrypts messages (fast, unlimited size, authenticated)
+ * - Each message encrypted for multiple devices using pairwise ECDH
  */
 
-// Generate RSA key pair for asymmetric encryption
-export async function generateKeyPair(): Promise<{ publicKey: string; privateKey: string }> {
+// ============================================================================
+// KEY GENERATION
+// ============================================================================
+
+/**
+ * Generate EC P-256 key pair
+ * ~44 chars base64 for public key (vs ~390 for RSA-2048)
+ * 1-5ms generation time (vs 50-200ms for RSA)
+ */
+export async function generateKeyPair(): Promise<{
+  publicKey: string;
+  privateKey: string;
+}> {
   try {
     const keyPair = await window.crypto.subtle.generateKey(
       {
-        name: 'RSA-OAEP',
-        modulusLength: 2048,
-        publicExponent: new Uint8Array([1, 0, 1]),
-        hash: 'SHA-256',
+        name: "ECDH",
+        namedCurve: "P-256", // NIST P-256 curve (widely supported)
       },
-      true,
-      ['encrypt', 'decrypt']
+      true, // extractable
+      ["deriveKey", "deriveBits"],
     );
 
-    const publicKey = await window.crypto.subtle.exportKey('spki', keyPair.publicKey);
-    const privateKey = await window.crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
+    // Export public key as raw format (uncompressed point)
+    const publicKeyBuffer = await window.crypto.subtle.exportKey(
+      "raw",
+      keyPair.publicKey,
+    );
+
+    // Export private key as PKCS8 format
+    const privateKeyBuffer = await window.crypto.subtle.exportKey(
+      "pkcs8",
+      keyPair.privateKey,
+    );
 
     return {
-      publicKey: arrayBufferToBase64(publicKey),
-      privateKey: arrayBufferToBase64(privateKey),
+      publicKey: arrayBufferToBase64(publicKeyBuffer), // ~88 chars
+      privateKey: arrayBufferToBase64(privateKeyBuffer), // ~121 chars
     };
   } catch (error) {
-    console.error('Error generating key pair:', error);
-    throw new Error('Failed to generate encryption keys');
+    console.error("Error generating EC key pair:", error);
+    throw new Error("Failed to generate encryption keys");
   }
 }
 
-// Import public key from base64 string
-export async function importPublicKey(publicKeyBase64: string): Promise<CryptoKey> {
+/**
+ * Import EC public key from base64 string
+ */
+async function importPublicKey(publicKeyBase64: string): Promise<CryptoKey> {
   try {
     const publicKeyBuffer = base64ToArrayBuffer(publicKeyBase64);
     return await window.crypto.subtle.importKey(
-      'spki',
+      "raw",
       publicKeyBuffer,
       {
-        name: 'RSA-OAEP',
-        hash: 'SHA-256',
+        name: "ECDH",
+        namedCurve: "P-256",
       },
       true,
-      ['encrypt']
+      [], // public keys don't need usages for ECDH
     );
   } catch (error) {
-    console.error('Error importing public key:', error);
-    throw new Error('Failed to import public key');
+    console.error("Error importing public key:", error);
+    throw new Error("Failed to import public key");
   }
 }
 
-// Import private key from base64 string
-export async function importPrivateKey(privateKeyBase64: string): Promise<CryptoKey> {
+/**
+ * Import EC private key from base64 string
+ */
+async function importPrivateKey(privateKeyBase64: string): Promise<CryptoKey> {
   try {
     const privateKeyBuffer = base64ToArrayBuffer(privateKeyBase64);
     return await window.crypto.subtle.importKey(
-      'pkcs8',
+      "pkcs8",
       privateKeyBuffer,
       {
-        name: 'RSA-OAEP',
-        hash: 'SHA-256',
+        name: "ECDH",
+        namedCurve: "P-256",
       },
       true,
-      ['decrypt']
+      ["deriveKey", "deriveBits"],
     );
   } catch (error) {
-    console.error('Error importing private key:', error);
-    throw new Error('Failed to import private key');
+    console.error("Error importing private key:", error);
+    throw new Error("Failed to import private key");
   }
 }
 
-// Encrypt message with recipient's public key
-export async function encryptMessage(message: string, publicKeyBase64: string): Promise<string> {
+// ============================================================================
+// ECDH KEY DERIVATION
+// ============================================================================
+
+/**
+ * Derive shared AES key between two EC key pairs using ECDH
+ * Both parties can derive the SAME key without transmitting it!
+ *
+ * @param myPrivateKey - My EC private key (base64)
+ * @param theirPublicKey - Their EC public key (base64)
+ * @returns CryptoKey - AES-256-GCM key for encryption/decryption
+ */
+async function deriveDevicePairKey(
+  myPrivateKey: string,
+  theirPublicKey: string,
+): Promise<CryptoKey> {
   try {
-    const publicKey = await importPublicKey(publicKeyBase64);
-    const encodedMessage = new TextEncoder().encode(message);
+    // Import keys
+    const privateKey = await importPrivateKey(myPrivateKey);
+    const publicKey = await importPublicKey(theirPublicKey);
 
-    const encryptedBuffer = await window.crypto.subtle.encrypt(
+    // Derive shared secret using ECDH
+    // This produces the SAME secret for both parties:
+    // ECDH(myPrivate, theirPublic) === ECDH(theirPrivate, myPublic)
+    const sharedSecret = await window.crypto.subtle.deriveKey(
       {
-        name: 'RSA-OAEP',
-      },
-      publicKey,
-      encodedMessage
-    );
-
-    return arrayBufferToBase64(encryptedBuffer);
-  } catch (error) {
-    console.error('Error encrypting message:', error);
-    throw new Error('Failed to encrypt message');
-  }
-}
-
-// Decrypt message with own private key
-export async function decryptMessage(encryptedMessage: string, privateKeyBase64: string): Promise<string> {
-  try {
-    const privateKey = await importPrivateKey(privateKeyBase64);
-    const encryptedBuffer = base64ToArrayBuffer(encryptedMessage);
-
-    const decryptedBuffer = await window.crypto.subtle.decrypt(
-      {
-        name: 'RSA-OAEP',
+        name: "ECDH",
+        public: publicKey,
       },
       privateKey,
-      encryptedBuffer
+      {
+        name: "AES-GCM",
+        length: 256, // AES-256
+      },
+      false, // not extractable (more secure)
+      ["encrypt", "decrypt"],
     );
 
-    return new TextDecoder().decode(decryptedBuffer);
+    return sharedSecret;
   } catch (error) {
-    console.error('Error decrypting message:', error);
-    // Don't throw, return a user-friendly message instead
-    return '[Message encrypted with different key - cannot decrypt]';
+    console.error("Error deriving device pair key:", error);
+    throw new Error("Failed to derive encryption key");
   }
 }
 
-// Encrypt data with backup key (for export/import)
-export async function encryptWithBackupKey(data: string, backupKey: string): Promise<string> {
+// ============================================================================
+// AES-GCM ENCRYPTION/DECRYPTION
+// ============================================================================
+
+/**
+ * Encrypt message with AES-256-GCM
+ *
+ * @param message - Plain text message
+ * @param key - AES key (from ECDH derivation)
+ * @returns Object with encrypted content and IV
+ */
+async function encryptWithAES(
+  message: string,
+  key: CryptoKey,
+): Promise<{ encryptedContent: string; iv: string }> {
+  try {
+    // Generate random 12-byte IV (initialization vector)
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+
+    // Encode message to bytes
+    const encoder = new TextEncoder();
+    const messageBuffer = encoder.encode(message);
+
+    // Encrypt with AES-GCM
+    const encryptedBuffer = await window.crypto.subtle.encrypt(
+      {
+        name: "AES-GCM",
+        iv: iv,
+        tagLength: 128, // authentication tag length
+      },
+      key,
+      messageBuffer,
+    );
+
+    return {
+      encryptedContent: arrayBufferToBase64(encryptedBuffer),
+      iv: arrayBufferToBase64(iv.buffer),
+    };
+  } catch (error) {
+    console.error("Error encrypting with AES:", error);
+    throw new Error("Failed to encrypt message");
+  }
+}
+
+/**
+ * Decrypt message with AES-256-GCM
+ *
+ * @param encryptedContent - Encrypted message (base64)
+ * @param iv - Initialization vector (base64)
+ * @param key - AES key (from ECDH derivation)
+ * @returns Decrypted plain text message
+ */
+async function decryptWithAES(
+  encryptedContent: string,
+  iv: string,
+  key: CryptoKey,
+): Promise<string> {
+  try {
+    // Decode from base64
+    const encryptedBuffer = base64ToArrayBuffer(encryptedContent);
+    const ivBuffer = base64ToArrayBuffer(iv);
+
+    // Decrypt with AES-GCM
+    const decryptedBuffer = await window.crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: ivBuffer,
+        tagLength: 128,
+      },
+      key,
+      encryptedBuffer,
+    );
+
+    // Decode bytes to string
+    const decoder = new TextDecoder();
+    return decoder.decode(decryptedBuffer);
+  } catch (error) {
+    console.error("Error decrypting with AES:", error);
+    return "[Failed to decrypt message]";
+  }
+}
+
+// ============================================================================
+// MULTI-DEVICE ENCRYPTION
+// ============================================================================
+
+export interface Device {
+  _id: string;
+  deviceId: string;
+  publicKey: string;
+  deviceType: "web" | "ios" | "android";
+}
+
+export interface EncryptedVersion {
+  forDeviceId: string;
+  encryptedContent: string;
+  iv: string;
+}
+
+/**
+ * Prepare message for multiple devices using ECDH + AES
+ *
+ * Flow:
+ * 1. For each target device, derive AES key using ECDH(myPrivate, theirPublic)
+ * 2. Encrypt message with derived AES key
+ * 3. Store encrypted version with device ID
+ *
+ * Multi-device support:
+ * - Current device: Stores plaintext locally (no encryption needed)
+ * - Other sender devices: Encrypt so they can decrypt when fetching from backend
+ * - All recipient devices: Encrypt so they can decrypt when receiving
+ *
+ * @param message - Plain text message
+ * @param senderDeviceId - Current device's _id (MongoDB ObjectId)
+ * @param senderDevices - Sender's OTHER devices (excluding current - for multi-device sync)
+ * @param recipientDevices - ALL recipient's devices
+ * @returns Object ready to send to backend
+ */
+export async function prepareMultiDeviceMessage(
+  message: string,
+  senderDeviceId: string,
+  senderDevices: Device[],
+  recipientDevices: Device[],
+): Promise<{
+  senderDeviceId: string;
+  encryptedVersions: EncryptedVersion[];
+}> {
+  try {
+    const keys = retrieveKeys();
+    if (!keys || !keys.privateKey) {
+      throw new Error("Private key not found");
+    }
+    const { privateKey } = keys;
+
+    const encryptedVersions: EncryptedVersion[] = [];
+
+    // Encrypt for recipient's devices
+    for (const device of recipientDevices) {
+      try {
+        // Derive shared AES key using ECDH
+        const aesKey = await deriveDevicePairKey(privateKey, device.publicKey);
+
+        // Encrypt message with AES
+        const { encryptedContent, iv } = await encryptWithAES(message, aesKey);
+
+        encryptedVersions.push({
+          forDeviceId: device._id, // Use MongoDB _id
+          encryptedContent,
+          iv,
+        });
+      } catch (error) {
+        console.error(`Failed to encrypt for device ${device._id}:`, error);
+        // Continue with other devices even if one fails
+      }
+    }
+
+    // Encrypt for sender's OTHER devices (excluding current device)
+    // Current device stores plaintext locally, no need to encrypt for itself
+    // Other devices will decrypt when fetching from backend
+    for (const device of senderDevices) {
+      try {
+        const aesKey = await deriveDevicePairKey(privateKey, device.publicKey);
+        const { encryptedContent, iv } = await encryptWithAES(message, aesKey);
+
+        encryptedVersions.push({
+          forDeviceId: device._id,
+          encryptedContent,
+          iv,
+        });
+      } catch (error) {
+        console.error(
+          `Failed to encrypt for sender device ${device._id}:`,
+          error,
+        );
+      }
+    }
+
+    if (encryptedVersions.length === 0) {
+      throw new Error("Failed to encrypt message for any device");
+    }
+
+    return {
+      senderDeviceId,
+      encryptedVersions,
+    };
+  } catch (error) {
+    console.error("Error preparing multi-device message:", error);
+    throw new Error("Failed to prepare encrypted message");
+  }
+}
+
+/**
+ * Decrypt message from device-specific encrypted versions
+ *
+ * @param encryptedVersions - Array of encrypted versions
+ * @param myDeviceId - Current device's _id (MongoDB ObjectId)
+ * @param senderDevicePublicKey - Sender device's public key
+ * @returns Decrypted plain text message
+ */
+export async function decryptMultiDeviceMessage(
+  encryptedVersions: EncryptedVersion[],
+  myDeviceId: string,
+  senderDevicePublicKey: string,
+): Promise<string> {
+  try {
+    // Find the encrypted version for this device
+    const myVersion = encryptedVersions.find(
+      (version) => version.forDeviceId === myDeviceId,
+    );
+
+    if (!myVersion) {
+      return "[Message not encrypted for this device]";
+    }
+
+    // Get my private key
+    const keys = retrieveKeys();
+    if (!keys || !keys.privateKey) {
+      return "[Private key not found]";
+    }
+    const { privateKey } = keys;
+
+    // Derive the same AES key using ECDH
+    const aesKey = await deriveDevicePairKey(privateKey, senderDevicePublicKey);
+
+    // Decrypt with AES
+    return await decryptWithAES(
+      myVersion.encryptedContent,
+      myVersion.iv,
+      aesKey,
+    );
+  } catch (error) {
+    console.error("Error decrypting multi-device message:", error);
+    return "[Failed to decrypt message]";
+  }
+}
+
+// ============================================================================
+// BACKUP/EXPORT ENCRYPTION (Optional - for data export feature)
+// ============================================================================
+
+/**
+ * Encrypt data with backup key (for export/import)
+ * Uses password-based encryption with AES-GCM
+ */
+export async function encryptWithBackupKey(
+  data: string,
+  backupKey: string,
+): Promise<string> {
   try {
     const encoder = new TextEncoder();
     const dataBuffer = encoder.encode(data);
     const keyBuffer = encoder.encode(backupKey);
 
-    // Generate a key from the backup key
+    // Derive key from backup password using SHA-256
+    const keyHash = await window.crypto.subtle.digest("SHA-256", keyBuffer);
+
+    // Import as AES key
     const importedKey = await window.crypto.subtle.importKey(
-      'raw',
-      await window.crypto.subtle.digest('SHA-256', keyBuffer),
-      { name: 'AES-GCM' },
+      "raw",
+      keyHash,
+      { name: "AES-GCM" },
       false,
-      ['encrypt']
+      ["encrypt"],
     );
 
     // Generate IV
@@ -135,11 +414,11 @@ export async function encryptWithBackupKey(data: string, backupKey: string): Pro
     // Encrypt
     const encryptedBuffer = await window.crypto.subtle.encrypt(
       {
-        name: 'AES-GCM',
+        name: "AES-GCM",
         iv: iv,
       },
       importedKey,
-      dataBuffer
+      dataBuffer,
     );
 
     // Combine IV and encrypted data
@@ -149,24 +428,31 @@ export async function encryptWithBackupKey(data: string, backupKey: string): Pro
 
     return arrayBufferToBase64(combined.buffer);
   } catch (error) {
-    console.error('Error encrypting with backup key:', error);
-    throw new Error('Failed to encrypt with backup key');
+    console.error("Error encrypting with backup key:", error);
+    throw new Error("Failed to encrypt with backup key");
   }
 }
 
-// Decrypt data with backup key (for export/import)
-export async function decryptWithBackupKey(encryptedData: string, backupKey: string): Promise<string> {
+/**
+ * Decrypt data with backup key (for export/import)
+ */
+export async function decryptWithBackupKey(
+  encryptedData: string,
+  backupKey: string,
+): Promise<string> {
   try {
     const encoder = new TextEncoder();
     const keyBuffer = encoder.encode(backupKey);
 
-    // Generate a key from the backup key
+    // Derive key from backup password
+    const keyHash = await window.crypto.subtle.digest("SHA-256", keyBuffer);
+
     const importedKey = await window.crypto.subtle.importKey(
-      'raw',
-      await window.crypto.subtle.digest('SHA-256', keyBuffer),
-      { name: 'AES-GCM' },
+      "raw",
+      keyHash,
+      { name: "AES-GCM" },
       false,
-      ['decrypt']
+      ["decrypt"],
     );
 
     // Decode the combined data
@@ -177,50 +463,41 @@ export async function decryptWithBackupKey(encryptedData: string, backupKey: str
     // Decrypt
     const decryptedBuffer = await window.crypto.subtle.decrypt(
       {
-        name: 'AES-GCM',
+        name: "AES-GCM",
         iv: iv,
       },
       importedKey,
-      encryptedBuffer
+      encryptedBuffer,
     );
 
     return new TextDecoder().decode(decryptedBuffer);
   } catch (error) {
-    console.error('Error decrypting with backup key:', error);
-    throw new Error('Failed to decrypt with backup key');
+    console.error("Error decrypting with backup key:", error);
+    throw new Error("Failed to decrypt with backup key");
   }
 }
 
-// Helper: Convert ArrayBuffer to Base64
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
+// ============================================================================
+// STORAGE FUNCTIONS
+// ============================================================================
 
-// Helper: Convert Base64 to ArrayBuffer
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
-
-// Store keys in localStorage
+/**
+ * Store EC keys in localStorage
+ */
 export function storeKeys(publicKey: string, privateKey: string): void {
-  localStorage.setItem('publicKey', publicKey);
-  localStorage.setItem('privateKey', privateKey);
+  localStorage.setItem("publicKey", publicKey);
+  localStorage.setItem("privateKey", privateKey);
 }
 
-// Retrieve keys from localStorage
-export function retrieveKeys(): { publicKey: string; privateKey: string } | null {
-  const publicKey = localStorage.getItem('publicKey');
-  const privateKey = localStorage.getItem('privateKey');
+/**
+ * Retrieve EC keys from localStorage
+ */
+export function retrieveKeys(): {
+  publicKey: string;
+  privateKey: string;
+} | null {
+  const publicKey = localStorage.getItem("publicKey");
+  const privateKey = localStorage.getItem("privateKey");
 
   if (!publicKey || !privateKey) {
     return null;
@@ -229,144 +506,59 @@ export function retrieveKeys(): { publicKey: string; privateKey: string } | null
   return { publicKey, privateKey };
 }
 
-// Clear keys from localStorage
+/**
+ * Clear keys from localStorage
+ */
 export function clearKeys(): void {
-  localStorage.removeItem('publicKey');
-  localStorage.removeItem('privateKey');
+  localStorage.removeItem("publicKey");
+  localStorage.removeItem("privateKey");
 }
 
-// Store device _id (MongoDB ObjectId) in localStorage
+/**
+ * Store device _id (MongoDB ObjectId) in localStorage
+ */
 export function storeDeviceId(deviceId: string): void {
-  localStorage.setItem('deviceId', deviceId);
+  localStorage.setItem("deviceId", deviceId);
 }
 
-// Retrieve device _id from localStorage
+/**
+ * Retrieve device _id from localStorage
+ */
 export function retrieveDeviceId(): string | null {
-  return localStorage.getItem('deviceId');
+  return localStorage.getItem("deviceId");
 }
 
-// Clear device _id from localStorage
+/**
+ * Clear device _id from localStorage
+ */
 export function clearDeviceId(): void {
-  localStorage.removeItem('deviceId');
+  localStorage.removeItem("deviceId");
 }
 
-// Multi-device encryption helper types
-export interface DeviceEncryptedVersion {
-  deviceId: string;
-  encryptedContent: string;
-}
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
 
-export interface Device {
-  _id: string;
-  deviceId: string;
-  publicKey: string;
-  deviceType: 'web' | 'ios' | 'android';
+/**
+ * Convert ArrayBuffer to Base64 string
+ */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 /**
- * Encrypt a message for multiple devices
- * @param message - The plain text message to encrypt
- * @param devices - Array of devices with their public keys
- * @returns Array of encrypted versions, one for each device (uses device._id as deviceId)
+ * Convert Base64 string to ArrayBuffer
  */
-export async function encryptMessageForDevices(
-  message: string,
-  devices: Device[]
-): Promise<DeviceEncryptedVersion[]> {
-  try {
-    const encryptedVersions: DeviceEncryptedVersion[] = [];
-
-    for (const device of devices) {
-      try {
-        const encryptedContent = await encryptMessage(message, device.publicKey);
-        encryptedVersions.push({
-          deviceId: device._id, // Use MongoDB _id, not UUID deviceId
-          encryptedContent,
-        });
-      } catch (error) {
-        console.error(`Failed to encrypt for device ${device._id}:`, error);
-        // Continue with other devices even if one fails
-      }
-    }
-
-    if (encryptedVersions.length === 0) {
-      throw new Error('Failed to encrypt message for any device');
-    }
-
-    return encryptedVersions;
-  } catch (error) {
-    console.error('Error encrypting message for devices:', error);
-    throw new Error('Failed to encrypt message for devices');
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
   }
-}
-
-/**
- * Decrypt a message from device-specific encrypted versions
- * @param encryptedVersions - Array of encrypted versions
- * @param deviceId - Current device _id (MongoDB ObjectId)
- * @param privateKey - Private key for decryption
- * @returns Decrypted message or error message
- */
-export async function decryptMessageFromDevices(
-  encryptedVersions: DeviceEncryptedVersion[],
-  deviceId: string,
-  privateKey: string
-): Promise<string> {
-  try {
-    // Find the encrypted version for this device (deviceId is device._id)
-    const deviceVersion = encryptedVersions.find(
-      (version) => version.deviceId === deviceId
-    );
-
-    if (!deviceVersion) {
-      return '[Message not encrypted for this device]';
-    }
-
-    return await decryptMessage(deviceVersion.encryptedContent, privateKey);
-  } catch (error) {
-    console.error('Error decrypting message from devices:', error);
-    return '[Failed to decrypt message]';
-  }
-}
-
-/**
- * Prepare multi-device encrypted message data for sending
- * @param message - Plain text message
- * @param senderDevices - Array of sender's devices
- * @param recipientDevices - Array of recipient's devices
- * @param currentDeviceId - MongoDB _id of the device sending the message
- * @returns Object with encrypted versions for both sender and recipient
- */
-export async function prepareMultiDeviceMessage(
-  message: string,
-  senderDevices: Device[],
-  recipientDevices: Device[],
-  currentDeviceId: string
-): Promise<{
-  senderDeviceId: string;
-  senderEncryptedVersions: DeviceEncryptedVersion[];
-  recipientEncryptedVersions: DeviceEncryptedVersion[];
-}> {
-  try {
-    // Encrypt for all sender's devices (so they can see it on all devices)
-    const senderEncryptedVersions = await encryptMessageForDevices(
-      message,
-      senderDevices
-    );
-
-    // Encrypt for all recipient's devices
-    const recipientEncryptedVersions = await encryptMessageForDevices(
-      message,
-      recipientDevices
-    );
-
-    return {
-      senderDeviceId: currentDeviceId, // This should be device._id (MongoDB ObjectId)
-      senderEncryptedVersions,
-      recipientEncryptedVersions,
-    };
-  } catch (error) {
-    console.error('Error preparing multi-device message:', error);
-    throw new Error('Failed to prepare multi-device message');
-  }
+  return bytes.buffer;
 }

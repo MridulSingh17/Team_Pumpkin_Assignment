@@ -62,12 +62,7 @@ export const initializeSocket = (io: Server): Server => {
         callback?: (response: ISocketCallback) => void,
       ) => {
         try {
-          const {
-            conversationId,
-            senderDeviceId,
-            senderEncryptedVersions,
-            recipientEncryptedVersions,
-          } = data;
+          const { conversationId, senderDeviceId, encryptedVersions } = data;
           const senderId = authSocket.userId;
 
           // Validate data
@@ -91,47 +86,51 @@ export const initializeSocket = (io: Server): Server => {
             return;
           }
 
-          if (!Array.isArray(senderEncryptedVersions) || senderEncryptedVersions.length === 0) {
+          if (
+            !Array.isArray(encryptedVersions) ||
+            encryptedVersions.length === 0
+          ) {
             if (callback) {
               callback({
                 success: false,
-                message: "Sender encrypted versions must be a non-empty array",
-              });
-            }
-            return;
-          }
-
-          if (!Array.isArray(recipientEncryptedVersions) || recipientEncryptedVersions.length === 0) {
-            if (callback) {
-              callback({
-                success: false,
-                message: "Recipient encrypted versions must be a non-empty array",
+                message: "encryptedVersions must be a non-empty array",
               });
             }
             return;
           }
 
           // Validate structure of encrypted versions
-          const validateVersions = (versions: any[], name: string) => {
-            for (const version of versions) {
-              if (!version.deviceId || !version.encryptedContent) {
-                if (callback) {
-                  callback({
-                    success: false,
-                    message: `Invalid ${name}: each version must have deviceId and encryptedContent`,
-                  });
-                }
-                return false;
+          for (const version of encryptedVersions) {
+            if (
+              !version.forDeviceId ||
+              !version.encryptedContent ||
+              !version.iv
+            ) {
+              if (callback) {
+                callback({
+                  success: false,
+                  message:
+                    "Each version must have forDeviceId, encryptedContent, and iv",
+                });
               }
+              return;
             }
-            return true;
-          };
-
-          if (!validateVersions(senderEncryptedVersions, "sender encrypted versions")) {
-            return;
           }
 
-          if (!validateVersions(recipientEncryptedVersions, "recipient encrypted versions")) {
+          // Verify all forDeviceIds are valid active devices
+          const deviceIds = encryptedVersions.map((v: any) => v.forDeviceId);
+          const devicesCount = await Device.countDocuments({
+            _id: { $in: deviceIds },
+            isActive: true,
+          });
+
+          if (devicesCount !== deviceIds.length) {
+            if (callback) {
+              callback({
+                success: false,
+                message: "Some device IDs are invalid or inactive",
+              });
+            }
             return;
           }
 
@@ -192,16 +191,13 @@ export const initializeSocket = (io: Server): Server => {
             senderId,
             recipientId,
             senderDeviceId,
-            senderEncryptedVersions,
-            recipientEncryptedVersions,
+            encryptedVersions,
           };
-
 
           const createdMessage = await Message.create(messageData);
           const message = Array.isArray(createdMessage)
             ? createdMessage[0]
             : createdMessage;
-
 
           // Update conversation's lastMessageAt
           conversation.lastMessageAt = message.timestamp;

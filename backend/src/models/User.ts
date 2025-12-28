@@ -23,10 +23,6 @@ const userSchema = new Schema<IUser>({
     type: String,
     required: [true, "Password is required"],
   },
-  publicKey: {
-    type: String,
-    required: [true, "Public key is required"],
-  },
   createdAt: {
     type: Date,
     default: Date.now,

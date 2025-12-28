@@ -42,11 +42,11 @@ export const getMe = async (req: Request, res: Response): Promise<void> => {
     }
 
     res.status(200).json({
-    success: true,
-    data: {
-      user,
-    },
-  });
+      success: true,
+      data: {
+        user,
+      },
+    });
   } catch (error) {
     console.error("Get user profile error:", error);
     res.status(500).json({
@@ -75,12 +75,11 @@ export const getUserPublicKey = async (
     }
 
     res.status(200).json({
-    success: true,
-    data: {
-      publicKey: user.publicKey,
-      username: user.username,
-    },
-  });
+      success: true,
+      data: {
+        username: user.username,
+      },
+    });
   } catch (error) {
     console.error("Get public key error:", error);
     res.status(500).json({
@@ -111,11 +110,11 @@ export const updatePublicKey = async (
     const user = await User.findByIdAndUpdate(
       currentUserId,
       { publicKey },
-      { new: true }
+      { new: true },
     ).select("-passwordHash");
 
     if (!user) {
-      console.error('User not found with ID:', currentUserId);
+      console.error("User not found with ID:", currentUserId);
       res.status(404).json({
         success: false,
         message: "User not found",

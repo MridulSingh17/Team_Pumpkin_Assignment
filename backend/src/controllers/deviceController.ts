@@ -1,13 +1,16 @@
-import { Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
-import Device from '../models/Device';
-import User from '../models/User';
+import { Request, Response } from "express";
+import { v4 as uuidv4 } from "uuid";
+import Device from "../models/Device";
+import User from "../models/User";
 
 /**
  * Register a new device
  * POST /api/devices
  */
-export const registerDevice = async (req: Request, res: Response): Promise<void> => {
+export const registerDevice = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
   try {
     const { deviceType, publicKey } = req.body;
     const userId = req.userId;
@@ -16,16 +19,16 @@ export const registerDevice = async (req: Request, res: Response): Promise<void>
     if (!deviceType || !publicKey) {
       res.status(400).json({
         success: false,
-        message: 'Device type and public key are required',
+        message: "Device type and public key are required",
       });
       return;
     }
 
     // Validate device type
-    if (!['web', 'ios', 'android'].includes(deviceType)) {
+    if (!["web", "ios", "android"].includes(deviceType)) {
       res.status(400).json({
         success: false,
-        message: 'Invalid device type. Must be web, ios, or android',
+        message: "Invalid device type. Must be web, ios, or android",
       });
       return;
     }
@@ -35,7 +38,7 @@ export const registerDevice = async (req: Request, res: Response): Promise<void>
     if (!user) {
       res.status(404).json({
         success: false,
-        message: 'User not found',
+        message: "User not found",
       });
       return;
     }
@@ -49,7 +52,7 @@ export const registerDevice = async (req: Request, res: Response): Promise<void>
     if (activeDeviceCount >= 5) {
       res.status(400).json({
         success: false,
-        message: 'Maximum 5 devices allowed. Please remove a device first.',
+        message: "Maximum 5 devices allowed. Please remove a device first.",
       });
       return;
     }
@@ -68,7 +71,7 @@ export const registerDevice = async (req: Request, res: Response): Promise<void>
 
     res.status(201).json({
       success: true,
-      message: 'Device registered successfully',
+      message: "Device registered successfully",
       data: {
         device: {
           _id: device._id,
@@ -81,10 +84,10 @@ export const registerDevice = async (req: Request, res: Response): Promise<void>
       },
     });
   } catch (error) {
-    console.error('Register device error:', error);
+    console.error("Register device error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error registering device',
+      message: "Error registering device",
       error: (error as Error).message,
     });
   }
@@ -94,12 +97,15 @@ export const registerDevice = async (req: Request, res: Response): Promise<void>
  * Get all devices for current user
  * GET /api/devices/me
  */
-export const getMyDevices = async (req: Request, res: Response): Promise<void> => {
+export const getMyDevices = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
   try {
     const userId = req.userId;
 
     const devices = await Device.find({ userId, isActive: true })
-      .select('_id deviceId deviceType publicKey isActive createdAt')
+      .select("_id deviceId deviceType publicKey isActive createdAt")
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -111,10 +117,10 @@ export const getMyDevices = async (req: Request, res: Response): Promise<void> =
       },
     });
   } catch (error) {
-    console.error('Get devices error:', error);
+    console.error("Get devices error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching devices',
+      message: "Error fetching devices",
       error: (error as Error).message,
     });
   }
@@ -124,7 +130,10 @@ export const getMyDevices = async (req: Request, res: Response): Promise<void> =
  * Remove a device
  * DELETE /api/devices/:deviceId
  */
-export const removeDevice = async (req: Request, res: Response): Promise<void> => {
+export const removeDevice = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
   try {
     const { deviceId } = req.params;
     const userId = req.userId;
@@ -135,7 +144,7 @@ export const removeDevice = async (req: Request, res: Response): Promise<void> =
     if (!device) {
       res.status(404).json({
         success: false,
-        message: 'Device not found',
+        message: "Device not found",
       });
       return;
     }
@@ -146,13 +155,13 @@ export const removeDevice = async (req: Request, res: Response): Promise<void> =
 
     res.status(200).json({
       success: true,
-      message: 'Device removed successfully',
+      message: "Device removed successfully",
     });
   } catch (error) {
-    console.error('Remove device error:', error);
+    console.error("Remove device error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error removing device',
+      message: "Error removing device",
       error: (error as Error).message,
     });
   }
@@ -162,7 +171,10 @@ export const removeDevice = async (req: Request, res: Response): Promise<void> =
  * Mark device as active (for re-activation)
  * PUT /api/devices/:deviceId/active
  */
-export const markDeviceActive = async (req: Request, res: Response): Promise<void> => {
+export const markDeviceActive = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
   try {
     const { deviceId } = req.params;
     const userId = req.userId;
@@ -176,7 +188,7 @@ export const markDeviceActive = async (req: Request, res: Response): Promise<voi
     if (activeDeviceCount >= 5) {
       res.status(400).json({
         success: false,
-        message: 'Maximum 5 devices allowed. Please remove a device first.',
+        message: "Maximum 5 devices allowed. Please remove a device first.",
       });
       return;
     }
@@ -185,20 +197,20 @@ export const markDeviceActive = async (req: Request, res: Response): Promise<voi
     const device = await Device.findOneAndUpdate(
       { deviceId, userId },
       { isActive: true },
-      { new: true }
+      { new: true },
     );
 
     if (!device) {
       res.status(404).json({
         success: false,
-        message: 'Device not found',
+        message: "Device not found",
       });
       return;
     }
 
     res.status(200).json({
       success: true,
-      message: 'Device activated successfully',
+      message: "Device activated successfully",
       data: {
         device: {
           _id: device._id,
@@ -209,10 +221,10 @@ export const markDeviceActive = async (req: Request, res: Response): Promise<voi
       },
     });
   } catch (error) {
-    console.error('Activate device error:', error);
+    console.error("Activate device error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error activating device',
+      message: "Error activating device",
       error: (error as Error).message,
     });
   }
@@ -222,7 +234,10 @@ export const markDeviceActive = async (req: Request, res: Response): Promise<voi
  * Get all active devices for a specific user (for encryption purposes)
  * GET /api/devices/user/:userId
  */
-export const getUserDevices = async (req: Request, res: Response): Promise<void> => {
+export const getUserDevices = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
   try {
     const { userId } = req.params;
     const currentUserId = req.userId;
@@ -232,7 +247,7 @@ export const getUserDevices = async (req: Request, res: Response): Promise<void>
     // In production, you might want to restrict this to conversation participants only
 
     const devices = await Device.find({ userId, isActive: true })
-      .select('_id deviceId deviceType publicKey isActive createdAt')
+      .select("_id deviceId deviceType publicKey isActive createdAt")
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -242,10 +257,46 @@ export const getUserDevices = async (req: Request, res: Response): Promise<void>
       },
     });
   } catch (error) {
-    console.error('Get user devices error:', error);
+    console.error("Get user devices error:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching user devices',
+      message: "Error fetching user devices",
+      error: (error as Error).message,
+    });
+  }
+};
+
+/**
+ * Get single device by _id (for fetching public key during decryption)
+ * GET /api/devices/:deviceId
+ */
+export const getDevice = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { deviceId } = req.params;
+
+    const device = await Device.findById(deviceId).select(
+      "_id deviceId deviceType publicKey isActive createdAt",
+    );
+
+    if (!device) {
+      res.status(404).json({
+        success: false,
+        message: "Device not found",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        device,
+      },
+    });
+  } catch (error) {
+    console.error("Get device error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching device",
       error: (error as Error).message,
     });
   }

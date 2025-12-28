@@ -1,10 +1,10 @@
-import mongoose, { Schema } from 'mongoose';
+import mongoose, { Schema } from "mongoose";
 
 export interface IDevice extends mongoose.Document {
   _id: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
   deviceId: string;
-  deviceType: 'web' | 'ios' | 'android';
+  deviceType: "web" | "ios" | "android";
   publicKey: string;
   isActive: boolean;
   refreshToken: string | null;
@@ -19,7 +19,7 @@ const deviceSchema = new Schema<IDevice>(
   {
     userId: {
       type: Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
       index: true,
     },
@@ -31,12 +31,14 @@ const deviceSchema = new Schema<IDevice>(
     },
     deviceType: {
       type: String,
-      enum: ['web', 'ios', 'android'],
+      enum: ["web", "ios", "android"],
       required: true,
     },
     publicKey: {
       type: String,
       required: true,
+      // EC P-256 or X25519 public key (base64, ~44 chars)
+      // Much smaller than RSA-2048 (~390 chars)
     },
     isActive: {
       type: Boolean,
@@ -62,24 +64,24 @@ const deviceSchema = new Schema<IDevice>(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Compound index for efficient queries
 deviceSchema.index({ userId: 1, isActive: 1 });
 
 // Ensure user doesn't exceed 5 devices
-deviceSchema.pre('save', async function () {
+deviceSchema.pre("save", async function () {
   if (this.isNew) {
-    const count = await mongoose.model('Device').countDocuments({
+    const count = await mongoose.model("Device").countDocuments({
       userId: this.userId,
       isActive: true,
     });
 
     if (count >= 5) {
-      throw new Error('Maximum 5 devices allowed per user');
+      throw new Error("Maximum 5 devices allowed per user");
     }
   }
 });
 
-export default mongoose.model<IDevice>('Device', deviceSchema);
+export default mongoose.model<IDevice>("Device", deviceSchema);

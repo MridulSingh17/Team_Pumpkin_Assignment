@@ -3,7 +3,6 @@ export interface User {
   _id: string;
   email: string;
   username: string;
-  publicKey: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -26,7 +25,7 @@ export interface LoginData {
 export interface Device {
   _id: string;
   deviceId: string;
-  deviceType: 'web' | 'ios' | 'android';
+  deviceType: "web" | "ios" | "android";
   publicKey: string;
   isActive?: boolean;
   createdAt?: string;
@@ -34,7 +33,7 @@ export interface Device {
 }
 
 export interface RegisterDeviceData {
-  deviceType: 'web' | 'ios' | 'android';
+  deviceType: "web" | "ios" | "android";
   publicKey: string;
 }
 
@@ -53,7 +52,6 @@ export interface Participant {
   _id: string;
   username: string;
   email: string;
-  publicKey: string;
 }
 
 export interface Conversation {
@@ -69,9 +67,10 @@ export interface CreateConversationData {
 }
 
 // Message Types
-export interface DeviceEncryptedVersion {
-  deviceId: string;
+export interface EncryptedVersion {
+  forDeviceId: string;
   encryptedContent: string;
+  iv: string;
 }
 
 export interface Message {
@@ -84,16 +83,14 @@ export interface Message {
   };
   recipientId: string;
   senderDeviceId: string;
-  senderEncryptedVersions: DeviceEncryptedVersion[];
-  recipientEncryptedVersions: DeviceEncryptedVersion[];
+  encryptedVersions: EncryptedVersion[];
   timestamp: string;
 }
 
 export interface SendMessageData {
   conversationId: string;
   senderDeviceId: string;
-  senderEncryptedVersions: DeviceEncryptedVersion[];
-  recipientEncryptedVersions: DeviceEncryptedVersion[];
+  encryptedVersions: EncryptedVersion[];
 }
 
 export interface MessagesPagination {
@@ -163,8 +160,7 @@ export interface SocketMessage {
 export interface SendSocketMessage {
   conversationId: string;
   senderDeviceId: string;
-  senderEncryptedVersions: DeviceEncryptedVersion[];
-  recipientEncryptedVersions: DeviceEncryptedVersion[];
+  encryptedVersions: EncryptedVersion[];
 }
 
 // Encryption Types

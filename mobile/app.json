@@ -53,7 +53,8 @@
                 {
                     "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to scan QR codes."
                 }
-            ]
+            ],
+            "./plugins/withReactNativeCameraFix.js"
         ],
         "experiments": {
             "typedRoutes": true,
